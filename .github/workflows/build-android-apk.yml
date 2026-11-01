@@ -16,9 +16,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Reassemble the shared Nova source archive
+      - name: Verify archive parts and reassemble shared Nova source
         run: |
+          echo "Archive chunk lengths and checksums:"
+          for f in source/multi/chunks/part-*.b64; do wc -c "$f"; sha256sum "$f"; done
           cat source/multi/chunks/part-*.b64 | tr -d '\n' | base64 --decode > /tmp/nova-source.tar.gz
+          gzip -t /tmp/nova-source.tar.gz
           tar -xzf /tmp/nova-source.tar.gz
           test -f NovaBrowser_3.2_All_Devices/app/index.html
           test -f NovaBrowser_3.2_All_Devices/android/app/src/main/java/com/nova/browser/MainActivity.java
