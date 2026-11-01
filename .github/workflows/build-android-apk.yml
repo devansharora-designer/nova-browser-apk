@@ -1,22 +1,54 @@
-name: Build Nova Browser Android APK
+name: Build Nova Browser for Android, Windows and iPhone
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'Nova_Android_Source.zip'
-      - '.github/workflows/build-android-apk.yml'
+      - 'source/multi/READY'
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
-  build-apk:
+  prepare:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Extract Android source ZIP automatically
-        run: unzip -q Nova_Android_Source.zip
+      - name: Reassemble the shared Nova source archive
+        run: |
+          cat source/multi/chunks/part-*.b64 | tr -d '\n' | base64 --decode > /tmp/nova-source.tar.gz
+          tar -xzf /tmp/nova-source.tar.gz
+          test -f NovaBrowser_3.2_All_Devices/app/index.html
+          test -f NovaBrowser_3.2_All_Devices/android/app/src/main/java/com/nova/browser/MainActivity.java
+          test -f NovaBrowser_3.2_All_Devices/windows/NovaBrowser.cs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nova-shared-source
+          path: NovaBrowser_3.2_All_Devices/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 2
+
+  android:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: nova-shared-source
+          path: NovaBrowser_3.2_All_Devices
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate app icons and sync shared homepage into Android
+        run: |
+          python -m pip install --quiet pillow
+          python NovaBrowser_3.2_All_Devices/ci/make_icons.py
+          mkdir -p NovaBrowser_3.2_All_Devices/android/app/src/main/assets/nova
+          cp -a NovaBrowser_3.2_All_Devices/app/. NovaBrowser_3.2_All_Devices/android/app/src/main/assets/nova/
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -27,23 +59,106 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
-      - name: Build APK
-        run: gradle --no-daemon --stacktrace -p android :app:assembleDebug
-      - name: Prepare APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk NovaBrowser-3.2.apk
+      - name: Compile Android APK
+        run: gradle --no-daemon --stacktrace -p NovaBrowser_3.2_All_Devices/android :app:assembleDebug
+      - name: Prepare direct APK
+        run: cp NovaBrowser_3.2_All_Devices/android/app/build/outputs/apk/debug/app-debug.apk NovaBrowser-3.2.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: NovaBrowser-3.2-APK
+          name: nova-android-apk
           path: NovaBrowser-3.2.apk
           if-no-files-found: error
-          retention-days: 30
-      - name: Publish direct APK
+          retention-days: 5
+
+  windows:
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: nova-shared-source
+          path: NovaBrowser_3.2_All_Devices
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate application icons
+        run: |
+          python -m pip install --quiet pillow
+          python NovaBrowser_3.2_All_Devices/ci/make_icons.py
+      - name: Build Windows browser
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile 'NovaBrowser_3.2_All_Devices/windows/MicrosoftEdgeWebView2Setup.exe'
+          Set-Location 'NovaBrowser_3.2_All_Devices/windows'
+          .\BuildAndRun.ps1 -BuildOnly -SkipRuntimeInstall
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+      - name: Create Windows installer
+        shell: pwsh
+        run: |
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' 'NovaBrowser_3.2_All_Devices/windows/NovaBrowser.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed to create the Windows installer.' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nova-windows-installer
+          path: NovaBrowser_3.2_All_Devices/dist/NovaBrowser-3.2-Setup.exe
+          if-no-files-found: error
+          retention-days: 5
+
+  ios-pwa:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: nova-shared-source
+          path: NovaBrowser_3.2_All_Devices
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate PWA icons
+        run: |
+          python -m pip install --quiet pillow
+          python NovaBrowser_3.2_All_Devices/ci/make_icons.py
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: NovaBrowser_3.2_All_Devices/app
+      - name: Deploy iPhone and iPad web app
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  release:
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nova-android-apk
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: nova-windows-installer
+          path: release-assets
+      - name: Publish direct platform downloads
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: nova-3.2-build-${{ github.run_id }}-${{ github.run_attempt }}
-          name: Nova Browser 3.2 Android APK
-          body: Download NovaBrowser-3.2.apk below. It is an installable Android APK; do not extract it.
-          files: NovaBrowser-3.2.apk
+          tag_name: nova-3.2-${{ github.run_number }}
+          name: Nova Browser 3.2 — All Devices
+          body: |
+            Download the file for your device:
+            - Android: NovaBrowser-3.2.apk
+            - Windows: NovaBrowser-3.2-Setup.exe
+            iPhone/iPad: install from the published GitHub Pages web app using Safari → Share → Add to Home Screen.
+            Do not extract the APK or installer.
+          files: |
+            release-assets/NovaBrowser-3.2.apk
+            release-assets/NovaBrowser-3.2-Setup.exe
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
