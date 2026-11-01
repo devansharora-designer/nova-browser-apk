@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'NovaBrowser_3.2_Direct_APK_Build.zip'
+      - 'source/android-source.tar.gz.b64'
       - '.github/workflows/build-android-apk.yml'
 
 permissions:
@@ -15,10 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Unpack the single uploaded project ZIP
+      - name: Restore Android source archive
         run: |
-          unzip -q NovaBrowser_3.2_Direct_APK_Build.zip
-          cp -a NovaBrowser_3.2_Nova_Inside_Browser/android ./android
+          mkdir -p source
+          base64 --decode source/android-source.tar.gz.b64 > source/android-source.tar.gz
+          tar -xzf source/android-source.tar.gz
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
