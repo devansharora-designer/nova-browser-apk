@@ -1,0 +1,47 @@
+name: Build Nova Browser Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'android/**'
+      - '.github/workflows/build-android-apk.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Build APK
+        run: gradle --no-daemon --stacktrace -p android :app:assembleDebug
+      - name: Prepare APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk NovaBrowser-3.2.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NovaBrowser-3.2-APK
+          path: NovaBrowser-3.2.apk
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish direct APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nova-3.2-build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: Nova Browser 3.2 Android APK
+          body: Download NovaBrowser-3.2.apk below. It is an installable Android APK; do not extract it.
+          files: NovaBrowser-3.2.apk
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
